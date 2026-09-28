@@ -3,10 +3,13 @@
 
 import math
 import random
+import os
+import joblib
 import pandas as pd
 import folium
 import streamlit as st
 from streamlit_folium import st_folium
+from recommendations import get_recommendations
 
 # ---------------------------------------------------------
 # Page Configuration & Sidebar Setup
@@ -29,7 +32,25 @@ st.sidebar.markdown(
 
 # Main page title
 st.title("Cyclone Infrastructure Risk Prototype")
-st.caption("Simulate cyclone scenarios, estimate wind/flood hazards, and compute asset risk.")
+st.caption("AI-Powered Cyclone Hazard & Infrastructure Risk Prediction Model")
+
+# ---------------------------------------------------------
+# Load AI Model (At Startup)
+# ---------------------------------------------------------
+@st.cache_resource
+def load_risk_model():
+    model_path = "risk_model.pkl"
+    if os.path.exists(model_path):
+        try:
+            return joblib.load(model_path)
+        except Exception as e:
+            st.error(f"Error loading {model_path}: {e}")
+            return None
+    else:
+        st.warning("Model file `risk_model.pkl` not found. Please run training script first.")
+        return None
+
+risk_model = load_risk_model()
 
 # ---------------------------------------------------------
 # Synthetic Data Generation (30-40 assets)
@@ -106,7 +127,7 @@ def get_flood_hazard(elevation, rainfall):
 HAZARD_ORDINAL = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 ORDINAL_TO_HAZARD = {0: "LOW", 1: "MEDIUM", 2: "HIGH", 3: "CRITICAL"}
 
-def compute_impact_forecast(df, cyclone_lat, cyclone_lon, max_wind, rainfall):
+def compute_impact_forecast(df, cyclone_lat, cyclone_lon, max_wind, rainfall, model=None):
     results = df.copy()
     distances = []
     winds = []
@@ -135,6 +156,59 @@ def compute_impact_forecast(df, cyclone_lat, cyclone_lon, max_wind, rainfall):
     results["wind_hazard"] = wind_hazards
     results["flood_hazard"] = flood_hazards
     results["rule_based_risk"] = combined_risks
+
+    # ---------------------------------------------------------
+    # AI Risk Prediction Integration
+    # ---------------------------------------------------------
+    if model is not None:
+        feature_rows = []
+        for _, row in results.iterrows():
+            t = row["type"]
+            f_vector = [
+                row["estimated_wind_kmh"],
+                rainfall,
+                row["elevation_m"],
+                row["distance_km"],
+                1 if t == "hospital" else 0,
+                1 if t == "shelter" else 0,
+                1 if t == "road" else 0,
+                1 if t == "power_station" else 0,
+                row["importance"],
+                HAZARD_ORDINAL[row["rule_based_risk"]]
+            ]
+            feature_rows.append(f_vector)
+
+        # Predict probability of class 1 (High Risk)
+        probs = model.predict_proba(feature_rows)[:, 1]
+        
+        ai_probs = []
+        ai_cats = []
+        recs = []
+
+        for idx, p in enumerate(probs):
+            p_val = round(float(p), 3)
+            if p_val >= 0.7:
+                cat = "HIGH"
+            elif p_val >= 0.4:
+                cat = "MEDIUM"
+            else:
+                cat = "LOW"
+            
+            row_item = results.iloc[idx]
+            rec = get_recommendations(
+                row_item["type"], 
+                cat, 
+                {"wind_hazard": row_item["wind_hazard"], "flood_hazard": row_item["flood_hazard"]}
+            )
+
+            ai_probs.append(p_val)
+            ai_cats.append(cat)
+            recs.append(rec)
+
+        results["ai_high_risk_prob"] = ai_probs
+        results["ai_risk_category"] = ai_cats
+        results["recommendations"] = recs
+
     return results
 
 # ---------------------------------------------------------
@@ -168,7 +242,8 @@ if st.session_state["forecast_run"]:
         cyclone_lat, 
         cyclone_lon, 
         max_wind_kmh, 
-        rainfall_mm_per_hour
+        rainfall_mm_per_hour,
+        model=risk_model
     )
 
 # ---------------------------------------------------------
@@ -200,7 +275,19 @@ if st.session_state["forecast_run"]:
     ).add_to(m)
 
 for _, row in df_assets.iterrows():
-    if "rule_based_risk" in row:
+    if "ai_risk_category" in row:
+        color = risk_color_map.get(row["ai_risk_category"], "gray")
+        popup_text = f"""
+        <b>{row['name']}</b><br>
+        ID: {row['id']} | Type: {row['type']}<br>
+        Elevation: {row['elevation_m']} m<br>
+        Rule Risk: <b>{row['rule_based_risk']}</b><br>
+        <b>AI Risk Level: {row['ai_risk_category']}</b> (Prob: {row['ai_high_risk_prob']})<br>
+        <hr style="margin: 4px 0;">
+        <b>Action:</b> {row['recommendations']}
+        """
+        tooltip_text = f"{row['name']} | AI Risk: {row['ai_risk_category']} ({row['ai_high_risk_prob']})"
+    elif "rule_based_risk" in row:
         color = risk_color_map.get(row["rule_based_risk"], "gray")
         popup_text = f"""
         <b>{row['name']}</b><br>
@@ -210,7 +297,7 @@ for _, row in df_assets.iterrows():
         Estimated Wind: {row['estimated_wind_kmh']} km/h<br>
         Wind Hazard: {row['wind_hazard']}<br>
         Flood Hazard: {row['flood_hazard']}<br>
-        <b>Risk: {row['rule_based_risk']}</b>
+        <b>Rule-Based Risk: {row['rule_based_risk']}</b>
         """
         tooltip_text = f"{row['name']} | Risk: {row['rule_based_risk']}"
     else:
@@ -227,7 +314,7 @@ for _, row in df_assets.iterrows():
     
     folium.Marker(
         location=[row["lat"], row["lon"]],
-        popup=folium.Popup(popup_text, max_width=260),
+        popup=folium.Popup(popup_text, max_width=280),
         tooltip=tooltip_text,
         icon=folium.Icon(color=color, icon="info-sign")
     ).add_to(m)
@@ -238,9 +325,15 @@ st_folium(m, width="100%", height=500)
 # ---------------------------------------------------------
 # Asset Data Table
 # ---------------------------------------------------------
-st.subheader("Infrastructure Assets Data")
+st.subheader("Infrastructure Assets & AI Risk Assessment")
 if st.session_state["forecast_run"]:
-    st.success("Impact forecast computed successfully!")
-
-st.dataframe(df_assets)
-
+    st.success("AI Impact forecast and emergency recommendations computed successfully!")
+    
+    # Display selected columns including AI risk and recommendations
+    display_cols = [
+        "name", "type", "elevation_m", "rule_based_risk", 
+        "ai_risk_category", "ai_high_risk_prob", "recommendations"
+    ]
+    st.dataframe(df_assets[display_cols])
+else:
+    st.dataframe(df_assets)
