@@ -30,9 +30,14 @@ st.sidebar.markdown(
     """
 )
 
-# Main page title
-st.title("Cyclone Infrastructure Risk Prototype")
-st.caption("AI-Powered Cyclone Hazard & Infrastructure Risk Prediction Model")
+# Main Page Header
+st.title("🌪️ CycloneGuard AI")
+st.markdown(
+    """
+    **AI-Based Cyclone Impact & Infrastructure Vulnerability Forecaster (Prototype)**  
+    Predicts risk to hospitals, shelters, roads, and power stations from an approaching cyclone.
+    """
+)
 
 # ---------------------------------------------------------
 # Load AI Model (At Startup)
@@ -183,7 +188,7 @@ def compute_impact_forecast(df, cyclone_lat, cyclone_lon, max_wind, rainfall, mo
         
         ai_probs = []
         ai_cats = []
-        recs = []
+        recs_joined = []
 
         for idx, p in enumerate(probs):
             p_val = round(float(p), 3)
@@ -195,19 +200,26 @@ def compute_impact_forecast(df, cyclone_lat, cyclone_lon, max_wind, rainfall, mo
                 cat = "LOW"
             
             row_item = results.iloc[idx]
-            rec = get_recommendations(
-                row_item["type"], 
-                cat, 
-                {"wind_hazard": row_item["wind_hazard"], "flood_hazard": row_item["flood_hazard"]}
-            )
+            
+            # Risk factors list
+            risk_factors = []
+            if row_item["wind_hazard"] in ["HIGH", "CRITICAL"]:
+                risk_factors.append("high_wind")
+            if row_item["elevation_m"] < 5:
+                risk_factors.append("low_elevation")
+            if rainfall > 10:
+                risk_factors.append("high_rainfall")
+
+            rec_list = get_recommendations(row_item["type"], cat, risk_factors)
+            rec_str = " ".join(rec_list)
 
             ai_probs.append(p_val)
             ai_cats.append(cat)
-            recs.append(rec)
+            recs_joined.append(rec_str)
 
         results["ai_high_risk_prob"] = ai_probs
         results["ai_risk_category"] = ai_cats
-        results["recommendations"] = recs
+        results["recommendations"] = recs_joined
 
     return results
 
@@ -282,16 +294,17 @@ for _, row in df_assets.iterrows():
         ID: {row['id']} | Type: {row['type']}<br>
         Elevation: {row['elevation_m']} m<br>
         Rule Risk: <b>{row['rule_based_risk']}</b><br>
-        <b>AI Risk Level: {row['ai_risk_category']}</b> (Prob: {row['ai_high_risk_prob']})<br>
+        <b>AI Risk Category: {row['ai_risk_category']}</b> (Prob: {row['ai_high_risk_prob']})<br>
         <hr style="margin: 4px 0;">
-        <b>Action:</b> {row['recommendations']}
+        <b>Recommendation:</b> {row['recommendations']}
         """
         tooltip_text = f"{row['name']} | AI Risk: {row['ai_risk_category']} ({row['ai_high_risk_prob']})"
     elif "rule_based_risk" in row:
         color = risk_color_map.get(row["rule_based_risk"], "gray")
         popup_text = f"""
         <b>{row['name']}</b><br>
-        ID: {row['id']} | Type: {row['type']}<br>
+        ID: {row['id']}<br>
+        Type: {row['type']}<br>
         Elevation: {row['elevation_m']} m<br>
         Distance to Eye: {row['distance_km']} km<br>
         Estimated Wind: {row['estimated_wind_kmh']} km/h<br>
@@ -323,13 +336,36 @@ for _, row in df_assets.iterrows():
 st_folium(m, width="100%", height=500)
 
 # ---------------------------------------------------------
+# Summary Metrics & Critical Assets Section
+# ---------------------------------------------------------
+if st.session_state["forecast_run"]:
+    st.markdown("---")
+    st.subheader("Summary Metrics")
+    
+    col1, col2, col3 = st.columns(3)
+
+    high_risk_assets = df_assets[df_assets["ai_risk_category"] == "HIGH"]
+    hospitals_high = df_assets[(df_assets["type"] == "hospital") & (df_assets["ai_risk_category"] == "HIGH")]
+
+    with col1:
+        st.metric("Assets at HIGH risk", len(high_risk_assets))
+    with col2:
+        st.metric("Hospitals at HIGH risk", len(hospitals_high))
+    with col3:
+        st.metric("Total assets", len(df_assets))
+
+    st.subheader("Top 3 most critical assets (by AI risk)")
+    top3 = df_assets.sort_values("ai_high_risk_prob", ascending=False).head(3)
+    st.dataframe(top3[["name", "type", "ai_risk_category", "ai_high_risk_prob"]])
+
+# ---------------------------------------------------------
 # Asset Data Table
 # ---------------------------------------------------------
+st.markdown("---")
 st.subheader("Infrastructure Assets & AI Risk Assessment")
 if st.session_state["forecast_run"]:
     st.success("AI Impact forecast and emergency recommendations computed successfully!")
     
-    # Display selected columns including AI risk and recommendations
     display_cols = [
         "name", "type", "elevation_m", "rule_based_risk", 
         "ai_risk_category", "ai_high_risk_prob", "recommendations"

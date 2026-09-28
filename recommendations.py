@@ -1,66 +1,50 @@
 """
 recommendations.py
-Module to generate actionable emergency recommendations for infrastructure assets 
-based on asset type, AI predicted risk level, and hazard risk factors.
+Generates specific emergency recommendations based on asset type and AI predicted risk level.
 """
 
-def get_recommendations(asset_type: str, ai_risk_category: str, risk_factors: dict = None) -> str:
+def get_recommendations(asset_type: str, ai_risk_category: str, risk_factors: list = None) -> list:
     """
-    Returns 1-2 concise, actionable recommendations based on asset type and risk level.
+    Returns a list of 1-2 recommendation strings based on asset type and risk category.
     """
-    asset_type = str(asset_type).lower()
-    ai_risk_category = str(ai_risk_category).upper()
-    
-    if risk_factors is None:
-        risk_factors = {}
+    asset_type = str(asset_type).lower().strip()
+    ai_risk_category = str(ai_risk_category).upper().strip()
 
-    wind_hazard = risk_factors.get("wind_hazard", "LOW")
-    flood_hazard = risk_factors.get("flood_hazard", "LOW")
-
-    if ai_risk_category == "HIGH" or ai_risk_category == "CRITICAL":
-        if asset_type == "hospital":
-            if flood_hazard in ["HIGH", "CRITICAL"]:
-                return "Prepare backup power; relocate ICU patients to upper floors and secure emergency medical supplies."
-            return "Prepare generators and stock emergency oxygen; mobilize extra trauma staff."
-
-        elif asset_type == "shelter":
-            if flood_hazard in ["HIGH", "CRITICAL"]:
-                return "Elevate ground supplies; inspect roof waterproofing and activate emergency water filtration."
-            return "Verify capacity limits, restock emergency rations, and establish satellite communications."
-
-        elif asset_type == "road":
-            if flood_hazard in ["HIGH", "CRITICAL"]:
-                return "Deploy flood barriers; identify alternate evacuation routes and pre-position clearing crews."
-            return "Clear roadside drainage channels and place high-wind warning advisories."
-
-        elif asset_type == "power_station":
-            if flood_hazard in ["HIGH", "CRITICAL"]:
-                return "Deploy submersible pumps around transformer yards; prepare remote grid islanding."
-            return "Conduct emergency structural checks; initiate controlled load shedding if wind exceeds safety limits."
-
+    if asset_type == 'hospital':
+        if ai_risk_category == 'HIGH':
+            return [
+                'Prepare backup power and generators.',
+                'Move critical patients to upper floors; secure medical equipment.'
+            ]
         else:
-            return "Deploy rapid response team; conduct immediate safety and operational check."
+            return ['Monitor situation; ensure emergency protocols are ready.']
 
-    elif ai_risk_category == "MEDIUM":
-        if asset_type == "hospital":
-            return "Check generator fuel levels and verify emergency comms link with local control centers."
-        elif asset_type == "shelter":
-            return "Mark facility ready as secondary evacuation shelter; check food and medical kits."
-        elif asset_type == "road":
-            return "Monitor traffic density along evacuation corridor; stage tow vehicles."
-        elif asset_type == "power_station":
-            return "Inspect feeder lines and maintain backup power readiness for adjacent shelters."
+    elif asset_type == 'road':
+        if ai_risk_category == 'HIGH':
+            return [
+                'Identify alternate routes for emergency vehicles.',
+                'Pre-position repair crews and equipment.'
+            ]
         else:
-            return "Monitor weather updates and inspect primary control systems."
+            return ['Keep under observation; prepare for rapid closure if needed.']
 
-    else:  # LOW risk
-        if asset_type == "shelter":
-            return "Designate facility as primary safe evacuation center."
-        elif asset_type == "hospital":
-            return "Maintain standard operational readiness to receive transfers from vulnerable zones."
-        elif asset_type == "road":
-            return "Maintain open traffic flow for primary evacuation routes."
-        elif asset_type == "power_station":
-            return "Maintain standard grid output to support critical coastal facilities."
+    elif asset_type == 'shelter':
+        if ai_risk_category in ['LOW', 'MEDIUM']:
+            return ['Mark as suitable evacuation center; verify capacity and access.']
         else:
-            return "Standard operational status; monitor regional storm progress."
+            return ['Do not use as primary shelter; identify alternative safe locations.']
+
+    elif asset_type == 'power_station':
+        if ai_risk_category == 'HIGH':
+            return [
+                'Conduct emergency inspection; secure critical equipment.',
+                'Prepare backup power arrangements for nearby hospitals.'
+            ]
+        else:
+            return ['Ensure standby teams are ready; monitor grid stability.']
+
+    else:
+        if ai_risk_category == 'HIGH':
+            return ['Deploy rapid response team; conduct immediate safety check.']
+        else:
+            return ['Monitor weather updates and maintain standard protocols.']
