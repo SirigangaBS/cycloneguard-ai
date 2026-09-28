@@ -178,9 +178,9 @@ m = folium.Map(location=[19.5, 85.5], zoom_start=7, tiles="OpenStreetMap")
 
 risk_color_map = {
     "LOW": "green",
-    "MEDIUM": "yellow",
-    "HIGH": "orange",
-    "CRITICAL": "red"
+    "MEDIUM": "orange",
+    "HIGH": "red",
+    "CRITICAL": "darkred"
 }
 
 type_color_map = {
@@ -242,4 +242,5 @@ st.subheader("Infrastructure Assets Data")
 if st.session_state["forecast_run"]:
     st.success("Impact forecast computed successfully!")
 
-st.dataframe(df_assets, use_container_width=True)
+st.dataframe(df_assets)
+
