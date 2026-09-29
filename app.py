@@ -5,6 +5,12 @@ import math
 import random
 import os
 import joblib
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import pandas as pd
 import folium
 import streamlit as st
@@ -122,9 +128,15 @@ def get_wind_hazard(wind_speed):
         return "CRITICAL"
 
 def get_flood_hazard(elevation, rainfall):
-    if elevation < 5 and rainfall > 10:
+    if elevation < 5 and rainfall >= 50:
+        return "CRITICAL"
+    elif elevation < 5 and rainfall > 10:
+        return "HIGH"
+    elif elevation < 10 and rainfall >= 50:
         return "HIGH"
     elif elevation < 10 and rainfall > 5:
+        return "MEDIUM"
+    elif elevation < 20 and rainfall >= 100:
         return "MEDIUM"
     else:
         return "LOW"
@@ -183,8 +195,23 @@ def compute_impact_forecast(df, cyclone_lat, cyclone_lon, max_wind, rainfall, mo
             ]
             feature_rows.append(f_vector)
 
+        feature_cols = [
+            "wind_speed",
+            "rainfall_mm_h",
+            "elevation_m",
+            "distance_to_cyclone_km",
+            "type_hospital",
+            "type_shelter",
+            "type_road",
+            "type_power_station",
+            "importance",
+            "rule_based_risk"
+        ]
+
+        feature_df = pd.DataFrame(feature_rows, columns=feature_cols)
+
         # Predict probability of class 1 (High Risk)
-        probs = model.predict_proba(feature_rows)[:, 1]
+        probs = model.predict_proba(feature_df)[:, 1]
         
         ai_probs = []
         ai_cats = []
@@ -224,23 +251,125 @@ def compute_impact_forecast(df, cyclone_lat, cyclone_lon, max_wind, rainfall, mo
     return results
 
 # ---------------------------------------------------------
+# Gemini AI Situation Summary Generator Function
+# ---------------------------------------------------------
+def generate_gemini_summary(cyclone_lat, cyclone_lon, max_wind, rainfall, total_assets, high_risk_count, high_risk_hospitals, top3_df, custom_api_key=None):
+    api_key = (custom_api_key and custom_api_key.strip()) or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
+        except Exception:
+            api_key = None
+
+    def build_fallback_summary(note=""):
+        top_names = ", ".join([f"{row['name']} ({row['type']})" for _, row in top3_df.head(3).iterrows()]) if not top3_df.empty else "N/A"
+        return f"""
+### 1. Overall Situation
+A cyclone centered at **{cyclone_lat}°N, {cyclone_lon}°E** is generating maximum sustained winds of **{max_wind} km/h** and a rainfall rate of **{rainfall} mm/hr**. Out of **{total_assets}** assessed infrastructure assets, **{high_risk_count}** are at HIGH risk.
+
+### 2. Most Vulnerable Infrastructure
+Critical assets at immediate severe risk include **{high_risk_hospitals} high-risk hospitals** and top vulnerable locations: **{top_names}**.
+
+### 3. Key Areas Requiring Attention
+- Immediate backup power deployment for high-risk medical facilities.
+- Structural protection and localized evacuation alerts for low-elevation infrastructure.
+
+### 4. General Preparedness Considerations
+- Monitor storm track movement from ({cyclone_lat}°N, {cyclone_lon}°E).
+- Pre-position emergency response crews near identified high-risk zones.
+
+*{note}*
+"""
+
+    if not api_key or api_key in ["YOUR_GEMINI_API_KEY", "PASTE_KEY_HERE", "gen-lang-client-0654235235"]:
+        return build_fallback_summary("⚠️ Simulated fallback summary (Enter a valid Gemini API Key in the sidebar or `.streamlit/secrets.toml` for live AI generation)."), None
+
+    top_assets_lines = []
+    for _, row in top3_df.iterrows():
+        top_assets_lines.append(f"- {row['name']} ({row['type']}): AI High Risk Probability {row['ai_high_risk_prob']}, Category: {row['ai_risk_category']}")
+    top_assets_str = "\n".join(top_assets_lines)
+
+    prompt = f"""
+You are an emergency management AI assistant.
+Based strictly on the following cyclone simulation data, generate a concise natural-language situation summary.
+
+SCENARIO DATA:
+- Cyclone Center Location: Lat {cyclone_lat}°N, Lon {cyclone_lon}°E
+- Maximum Sustained Wind Speed: {max_wind} km/h
+- Rainfall Rate: {rainfall} mm/hour
+- Total Infrastructure Assets Assessed: {total_assets}
+- High-Risk Assets Count: {high_risk_count}
+- High-Risk Hospitals Count: {high_risk_hospitals}
+
+TOP 3 CRITICAL HIGH-RISK ASSETS:
+{top_assets_str}
+
+Respond with a concise emergency situation summary under 200 words with these 4 headings:
+1. Overall Situation
+2. Most Vulnerable Infrastructure
+3. Key Areas Requiring Attention
+4. General Preparedness Considerations
+"""
+
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents=prompt
+        )
+        return response.text, None
+    except Exception as e:
+        return build_fallback_summary(f"⚠️ Live API request failed: {e}. Showing simulated summary."), str(e)
+
+
+# ---------------------------------------------------------
 # Sidebar Controls & Forecast Scenario
 # ---------------------------------------------------------
-st.sidebar.subheader("Cyclone Scenario Parameters")
-cyclone_lat = 19.0
-cyclone_lon = 86.0
-max_wind_kmh = 150
-rainfall_mm_per_hour = 12
-
-st.sidebar.markdown(
-    f"""
-    - **Center**: ({cyclone_lat}, {cyclone_lon})
-    - **Max Wind**: {max_wind_kmh} km/h
-    - **Rainfall**: {rainfall_mm_per_hour} mm/h
-    """
+st.sidebar.markdown("---")
+st.sidebar.header("🔑 Gemini API Settings")
+user_gemini_key = st.sidebar.text_input(
+    "Gemini API Key (optional):",
+    type="password",
+    help="Enter key from https://aistudio.google.com/app/apikey if not set in secrets.toml"
 )
 
-run_button = st.sidebar.button("Run Impact Forecast", type="primary")
+st.sidebar.markdown("---")
+st.sidebar.header("🌪️ What-If Cyclone Simulation")
+
+cyclone_lat = st.sidebar.slider(
+    "Cyclone Latitude (°N)",
+    min_value=8.0,
+    max_value=22.0,
+    value=19.0,
+    step=0.1
+)
+
+cyclone_lon = st.sidebar.slider(
+    "Cyclone Longitude (°E)",
+    min_value=75.0,
+    max_value=95.0,
+    value=86.0,
+    step=0.1
+)
+
+max_wind_kmh = st.sidebar.slider(
+    "Maximum Wind Speed (km/h)",
+    min_value=50,
+    max_value=250,
+    value=150,
+    step=5
+)
+
+rainfall_mm_per_hour = st.sidebar.slider(
+    "Rainfall Rate (mm/hour)",
+    min_value=0,
+    max_value=300,
+    value=12,
+    step=1
+)
+
+run_button = st.sidebar.button("🚨 Run Impact Forecast", type="primary")
 
 if "forecast_run" not in st.session_state:
     st.session_state["forecast_run"] = False
@@ -340,6 +469,15 @@ st_folium(m, width="100%", height=500)
 # ---------------------------------------------------------
 if st.session_state["forecast_run"]:
     st.markdown("---")
+    st.subheader("📋 Scenario Summary")
+    st.info(
+        f"""
+        **Cyclone Center:** {cyclone_lat}, {cyclone_lon}  
+        **Maximum Wind:** {max_wind_kmh} km/h  
+        **Rainfall:** {rainfall_mm_per_hour} mm/hour  
+        """
+    )
+    
     st.subheader("Summary Metrics")
     
     col1, col2, col3 = st.columns(3)
@@ -358,6 +496,23 @@ if st.session_state["forecast_run"]:
     top3 = df_assets.sort_values("ai_high_risk_prob", ascending=False).head(3)
     st.dataframe(top3[["name", "type", "ai_risk_category", "ai_high_risk_prob"]])
 
+    st.subheader("🤖 Gemini AI Emergency Situation Summary")
+    summary_text, err_msg = generate_gemini_summary(
+        cyclone_lat,
+        cyclone_lon,
+        max_wind_kmh,
+        rainfall_mm_per_hour,
+        len(df_assets),
+        len(high_risk_assets),
+        len(hospitals_high),
+        top3,
+        custom_api_key=user_gemini_key
+    )
+    if summary_text:
+        st.markdown(summary_text)
+    else:
+        st.info(f"ℹ️ {err_msg}")
+
 # ---------------------------------------------------------
 # Asset Data Table
 # ---------------------------------------------------------
@@ -373,3 +528,5 @@ if st.session_state["forecast_run"]:
     st.dataframe(df_assets[display_cols])
 else:
     st.dataframe(df_assets)
+
+
